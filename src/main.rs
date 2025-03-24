@@ -1,5 +1,7 @@
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use serde::{Deserialize, Serialize};
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 
 #[derive(Serialize, Deserialize)]
 struct SudokuRequest {
@@ -139,7 +141,8 @@ async fn sudoku_endpoint(req: web::Json<SudokuRequest>) -> impl Responder {
 
     let solved = solve_sudoku(&mut grid);
     if solved {
-        HttpResponse::Ok().json(SudokuResponse {
+        save_solved_puzzle(&grid);
+        HttpResponse::Created().json(SudokuResponse {
             solution: grid,
             solved: true,
         })
@@ -157,14 +160,65 @@ async fn validate_sudoku_endpoint(req: web::Json<SudokuRequest>) -> impl Respond
     }
 }
 
+async fn get_solved_puzzles() -> impl Responder {
+    let file_path = "solved_puzzles.txt";
+    let mut file_data = String::new();
+
+    if let Ok(mut file) = File::open(file_path) {
+        if file.read_to_string(&mut file_data).is_ok() {
+            return HttpResponse::Ok().body(file_data);
+        }
+    }
+
+    HttpResponse::Ok().body("No solved puzzles stored yet.")
+}
+
+async fn delete_solved_puzzles() -> impl Responder {
+    let file_path = "solved_puzzles.txt";
+
+    if fs::metadata(file_path).is_err() {
+        return HttpResponse::Ok().body("No puzzles to delete.");
+    }
+
+    if fs::remove_file(file_path).is_ok() {
+        HttpResponse::Ok().body("All stored puzzles have been deleted.")
+    } else {
+        HttpResponse::InternalServerError().body("Failed to delete stored puzzles.")
+    }
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     HttpServer::new(|| {
         App::new()
             .route("/solve", web::post().to(sudoku_endpoint))
             .route("/validate", web::put().to(validate_sudoku_endpoint))
+            .route("/stored", web::get().to(get_solved_puzzles))
+            .route("/stored", web::delete().to(delete_solved_puzzles))
     })
     .bind("0.0.0.0:8080")?
     .run()
     .await
+}
+
+fn save_solved_puzzle(grid: &[[u8; 9]; 9]) {
+    let file_path = "solved_puzzles.txt";
+    let mut file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(file_path)
+        .expect("Failed to open file");
+
+    let formatted_grid: String = grid
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let _ = writeln!(file, "{}\n---", formatted_grid);
 }
